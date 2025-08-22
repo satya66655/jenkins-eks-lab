@@ -9,3 +9,10 @@ Repos:
 - .jenkins: Jenkinsfile(s) for CI/CD
 
 Fri Aug 22 11:05:46 UTC 2025
+
+## EC2-B Provisioning
+
+Scripts under `infra/ec2-b/` launch **Instance B** (Amazon Linux 2023) and install Docker using user-data.
+
+- `provision-ec2-b.sh`: Launches EC2 instance with tags and prints public IP.
+- `userdata-docker.sh`: Configures Docker and adds `ec2-user` to the docker group.
