@@ -1,0 +1,110 @@
+pipeline {
+  agent any
+
+  options {
+    ansiColor('xterm')
+    timestamps()
+  }
+
+  parameters {
+    string(name: 'AWS_REGION', defaultValue: 'us-east-1', description: 'AWS region')
+    string(name: 'AMI_ID', defaultValue: 'ami-0c7217cdde317cfec', description: 'Amazon Linux 2023 AMI (region-specific)')
+    string(name: 'INSTANCE_TYPE', defaultValue: 't2.micro', description: 'EC2 instance type for Instance B')
+    string(name: 'KEY_NAME', defaultValue: 'my-key', description: 'Existing EC2 key pair name')
+    string(name: 'SECURITY_GROUP_ID', defaultValue: 'sg-xxxxxxxx', description: 'Security Group ID allowing 22 (and others as needed)')
+    string(name: 'SUBNET_ID', defaultValue: 'subnet-xxxxxxxx', description: 'Subnet ID')
+    booleanParam(name: 'DRY_RUN', defaultValue: false, description: 'If true, skip provisioning stage')
+  }
+
+  environment {
+    GIT_URL = 'git@github.com:satya66655/jenkins-eks-lab.git' // use HTTPS + PAT if preferred
+    BRANCH  = 'main'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        // Choose ONE of the following (SSH or PAT). SSH shown here:
+        sshagent(credentials: ['github-ssh']) {
+          sh '''
+            set -euo pipefail
+            if [ ! -d jenkins-eks-lab ]; then
+              git clone "$GIT_URL"
+            fi
+            cd jenkins-eks-lab
+            git fetch origin
+            git checkout "$BRANCH"
+            git pull --rebase origin "$BRANCH"
+          '''
+        }
+        // For PAT instead, comment the block above and use:
+        // checkout([$class: 'GitSCM',
+        //   branches: [[name: "*/${BRANCH}"]],
+        //   userRemoteConfigs: [[url: 'https://github.com/satya66655/jenkins-eks-lab.git', credentialsId: 'github-pat']]
+        // ])
+      }
+    }
+
+    stage('Prepare Env') {
+      steps {
+        sh '''
+          set -e
+          aws --version
+          chmod +x jenkins-eks-lab/infra/ec2-b/*.sh
+        '''
+      }
+    }
+
+    stage('Provision EC2: Instance B') {
+      when { expression { return !params.DRY_RUN } }
+      environment {
+        AWS_DEFAULT_REGION = "${params.AWS_REGION}"
+      }
+      steps {
+        // If you’re not using an instance role, bind AWS keys:
+        // withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds-lab']]) {
+        //   sh 'echo "Using AWS creds from Jenkins"'
+        // }
+
+        sh '''
+          set -euo pipefail
+          cd jenkins-eks-lab
+
+          # Inject runtime values into the script via sed (simple and visible)
+          sed -i "s|^AMI_ID=.*|AMI_ID=\\"${AMI_ID}\\"|" infra/ec2-b/provision-ec2-b.sh
+          sed -i "s|^INSTANCE_TYPE=.*|INSTANCE_TYPE=\\"${INSTANCE_TYPE}\\"|" infra/ec2-b/provision-ec2-b.sh
+          sed -i "s|^KEY_NAME=.*|KEY_NAME=\\"${KEY_NAME}\\"|" infra/ec2-b/provision-ec2-b.sh
+          sed -i "s|^SECURITY_GROUP=.*|SECURITY_GROUP=\\"${SECURITY_GROUP_ID}\\"|" infra/ec2-b/provision-ec2-b.sh
+          sed -i "s|^SUBNET_ID=.*|SUBNET_ID=\\"${SUBNET_ID}\\"|" infra/ec2-b/provision-ec2-b.sh
+
+          ./infra/ec2-b/provision-ec2-b.sh | tee .jenkins/ec2b-output.txt
+        '''
+      }
+    }
+
+    stage('Capture Outputs') {
+      when { expression { return !params.DRY_RUN } }
+      steps {
+        sh '''
+          set -euo pipefail
+          cd jenkins-eks-lab
+
+          INSTANCE_ID=$(grep -E "^Instance ID:" .jenkins/ec2b-output.txt | awk '{print $3}')
+          PUBLIC_IP=$(grep -E "^Public IP:" .jenkins/ec2b-output.txt | awk '{print $3}')
+
+          echo "INSTANCE_ID=${INSTANCE_ID}" | tee .jenkins/ec2b.env
+          echo "PUBLIC_IP=${PUBLIC_IP}"   | tee -a .jenkins/ec2b.env
+          echo "Discovered Instance: $INSTANCE_ID, IP: $PUBLIC_IP"
+        '''
+        archiveArtifacts artifacts: 'jenkins-eks-lab/.jenkins/ec2b-*', fingerprint: true
+      }
+    }
+  }
+
+  post {
+    always {
+      echo 'Build completed.'
+    }
+  }
+}
+
