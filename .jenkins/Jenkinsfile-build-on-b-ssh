@@ -11,10 +11,9 @@ pipeline {
   }
 
   environment {
-    REGISTRY = 'docker.io'
-    // ✅ Export params so shell sees them (avoids "unbound variable")
-    B_HOST   = "${params.B_HOST}"
-    B_USER   = "${params.B_USER}"
+    REGISTRY   = 'docker.io'
+    B_HOST     = "${params.B_HOST}"
+    B_USER     = "${params.B_USER}"
     IMAGE_REPO = "${params.IMAGE_REPO}"
     IMAGE_TAG  = "${params.IMAGE_TAG}"
   }
@@ -59,6 +58,7 @@ pipeline {
     stage('Build & Push on Instance B') {
       steps {
         script {
+          // Core build script (no secrets here)
           String core = """
             set -euo pipefail
             cd ~/jenkins-ctx
@@ -69,14 +69,16 @@ pipeline {
             docker build -f docker/Dockerfile -t ${env.REGISTRY}/${env.IMAGE_REPO}:${env.IMAGE_TAG} .
           """
 
-          String pushPublic = """
-            docker push ${env.REGISTRY}/${env.IMAGE_REPO}:${env.IMAGE_TAG}
-          """
-
+          // Push with Docker Hub login — NOTE escaped \$ so Groovy doesn't expand
           String pushWithLogin = """
-            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin ${env.REGISTRY}
+            echo "\\$DOCKER_PASS" | docker login -u "\\$DOCKER_USER" --password-stdin ${env.REGISTRY}
             docker push ${env.REGISTRY}/${env.IMAGE_REPO}:${env.IMAGE_TAG}
             docker logout ${env.REGISTRY} || true
+          """
+
+          // Push without login (public repo, already logged in)
+          String pushPublic = """
+            docker push ${env.REGISTRY}/${env.IMAGE_REPO}:${env.IMAGE_TAG}
           """
 
           if (params.LOGIN_BEFORE_PUSH) {
