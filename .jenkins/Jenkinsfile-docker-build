@@ -1,0 +1,59 @@
+pipeline {
+  agent any
+
+  options {
+    timestamps()
+  }
+
+  parameters {
+    string(name: 'IMAGE_REPO', defaultValue: 'satya66655/lab-app', description: 'Docker Hub repo (namespace/name)')
+    string(name: 'IMAGE_TAG',  defaultValue: 'v1', description: 'Image tag to push')
+    string(name: 'DOCKER_CONTEXT', defaultValue: '.', description: 'Build context')
+    string(name: 'DOCKERFILE', defaultValue: 'docker/Dockerfile', description: 'Path to Dockerfile')
+  }
+
+  environment {
+    REGISTRY = 'docker.io'
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout([$class: 'GitSCM',
+          branches: [[name: "*/main"]],
+          userRemoteConfigs: [[url: 'https://github.com/satya66655/jenkins-eks-lab.git', credentialsId: 'github-pat']]
+        ])
+      }
+    }
+
+    stage('Docker Build') {
+      steps {
+        sh '''
+          set -euo pipefail
+          docker build -f "${DOCKERFILE}" -t "${REGISTRY}/${IMAGE_REPO}:${IMAGE_TAG}" "${DOCKER_CONTEXT}"
+          docker image ls "${REGISTRY}/${IMAGE_REPO}:${IMAGE_TAG}"
+        '''
+      }
+    }
+
+    stage('Docker Login & Push') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-satya', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+          sh '''
+            set -euo pipefail
+            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin "${REGISTRY}"
+            docker push "${REGISTRY}/${IMAGE_REPO}:${IMAGE_TAG}"
+            docker logout "${REGISTRY}"
+          '''
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "Pushed: ${REGISTRY}/${IMAGE_REPO}:${IMAGE_TAG}"
+    }
+  }
+}
+
