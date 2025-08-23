@@ -7,6 +7,5 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(msg)))
         self.end_headers()
         self.wfile.write(msg)
-
 if __name__ == "__main__":
     HTTPServer(("", 8080), Handler).serve_forever()
