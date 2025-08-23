@@ -2,7 +2,6 @@ pipeline {
   agent any
 
   options {
-    // ansiColor removed for compatibility
     timestamps()
   }
 
@@ -16,8 +15,14 @@ pipeline {
     booleanParam(name: 'DRY_RUN', defaultValue: false, description: 'If true, skip provisioning stage')
   }
 
+  // ✅ Make params available to shell as env vars
   environment {
     AWS_DEFAULT_REGION = "${params.AWS_REGION}"
+    AMI_ID            = "${params.AMI_ID}"
+    INSTANCE_TYPE     = "${params.INSTANCE_TYPE}"
+    KEY_NAME          = "${params.KEY_NAME}"
+    SECURITY_GROUP_ID = "${params.SECURITY_GROUP_ID}"
+    SUBNET_ID         = "${params.SUBNET_ID}"
   }
 
   stages {
@@ -45,15 +50,13 @@ pipeline {
     stage('Provision EC2: Instance B') {
       when { expression { return !params.DRY_RUN } }
       steps {
-        // If NOT using an instance role, bind AWS creds like this:
-        // withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds-lab']]) {
-        //   sh 'echo "Using AWS creds from Jenkins"'
-        // }
+        // If NOT using an instance role, you can bind creds here:
+        // withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'aws-creds-lab']]) { ... }
 
         sh '''
           set -euo pipefail
 
-          # Inject runtime values into the script via sed (simple for a lab)
+          # Use the param-derived env vars
           sed -i "s|^AMI_ID=.*|AMI_ID=\\"${AMI_ID}\\"|" infra/ec2-b/provision-ec2-b.sh
           sed -i "s|^INSTANCE_TYPE=.*|INSTANCE_TYPE=\\"${INSTANCE_TYPE}\\"|" infra/ec2-b/provision-ec2-b.sh
           sed -i "s|^KEY_NAME=.*|KEY_NAME=\\"${KEY_NAME}\\"|" infra/ec2-b/provision-ec2-b.sh
@@ -86,9 +89,7 @@ pipeline {
   }
 
   post {
-    always {
-      echo 'Build completed.'
-    }
+    always { echo 'Build completed.' }
   }
 }
 
