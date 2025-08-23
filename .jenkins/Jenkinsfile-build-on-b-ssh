@@ -12,6 +12,11 @@ pipeline {
 
   environment {
     REGISTRY = 'docker.io'
+    // ✅ Export params so shell sees them (avoids "unbound variable")
+    B_HOST   = "${params.B_HOST}"
+    B_USER   = "${params.B_USER}"
+    IMAGE_REPO = "${params.IMAGE_REPO}"
+    IMAGE_TAG  = "${params.IMAGE_TAG}"
   }
 
   stages {
@@ -40,7 +45,7 @@ pipeline {
 
     stage('Copy context to Instance B') {
       steps {
-        withCredentials([sshUserPrivateKey(credentialsId: 'ec2b-ssh', keyFileVariable: 'KEYFILE', usernameVariable: 'SSH_USER')]) {
+        withCredentials([sshUserPrivateKey(credentialsId: 'ec2b-ssh', keyFileVariable: 'KEYFILE')]) {
           sh '''
             set -euo pipefail
             SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
@@ -61,38 +66,38 @@ pipeline {
             tar -xzf build-context.tgz -C ctx
             cd ctx
             docker --version
-            docker build -f docker/Dockerfile -t ${env.REGISTRY}/${params.IMAGE_REPO}:${params.IMAGE_TAG} .
+            docker build -f docker/Dockerfile -t ${env.REGISTRY}/${env.IMAGE_REPO}:${env.IMAGE_TAG} .
           """
 
           String pushPublic = """
-            docker push ${env.REGISTRY}/${params.IMAGE_REPO}:${params.IMAGE_TAG}
+            docker push ${env.REGISTRY}/${env.IMAGE_REPO}:${env.IMAGE_TAG}
           """
 
           String pushWithLogin = """
             echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin ${env.REGISTRY}
-            docker push ${env.REGISTRY}/${params.IMAGE_REPO}:${params.IMAGE_TAG}
+            docker push ${env.REGISTRY}/${env.IMAGE_REPO}:${env.IMAGE_TAG}
             docker logout ${env.REGISTRY} || true
           """
 
           if (params.LOGIN_BEFORE_PUSH) {
             withCredentials([
-              sshUserPrivateKey(credentialsId: 'ec2b-ssh', keyFileVariable: 'KEYFILE', usernameVariable: 'SSH_USER'),
+              sshUserPrivateKey(credentialsId: 'ec2b-ssh', keyFileVariable: 'KEYFILE'),
               usernamePassword(credentialsId: 'dockerhub-satya', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')
             ]) {
               sh """
                 set -euo pipefail
                 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-                ssh \$SSH_OPTS -i "\$KEYFILE" "${params.B_USER}@${params.B_HOST}" '${core}'
-                ssh \$SSH_OPTS -i "\$KEYFILE" "${params.B_USER}@${params.B_HOST}" '${pushWithLogin}'
+                ssh \$SSH_OPTS -i "\$KEYFILE" "${env.B_USER}@${env.B_HOST}" '${core}'
+                ssh \$SSH_OPTS -i "\$KEYFILE" "${env.B_USER}@${env.B_HOST}" '${pushWithLogin}'
               """
             }
           } else {
-            withCredentials([sshUserPrivateKey(credentialsId: 'ec2b-ssh', keyFileVariable: 'KEYFILE', usernameVariable: 'SSH_USER')]) {
+            withCredentials([sshUserPrivateKey(credentialsId: 'ec2b-ssh', keyFileVariable: 'KEYFILE')]) {
               sh """
                 set -euo pipefail
                 SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-                ssh \$SSH_OPTS -i "\$KEYFILE" "${params.B_USER}@${params.B_HOST}" '${core}'
-                ssh \$SSH_OPTS -i "\$KEYFILE" "${params.B_USER}@${params.B_HOST}" '${pushPublic}'
+                ssh \$SSH_OPTS -i "\$KEYFILE" "${env.B_USER}@${env.B_HOST}" '${core}'
+                ssh \$SSH_OPTS -i "\$KEYFILE" "${env.B_USER}@${env.B_HOST}" '${pushPublic}'
               """
             }
           }
@@ -102,9 +107,7 @@ pipeline {
   }
 
   post {
-    success {
-      echo "Pushed: ${env.REGISTRY}/${params.IMAGE_REPO}:${params.IMAGE_TAG}"
-    }
+    success { echo "Pushed: ${env.REGISTRY}/${env.IMAGE_REPO}:${env.IMAGE_TAG}" }
   }
 }
 
