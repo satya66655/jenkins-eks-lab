@@ -1,0 +1,101 @@
+pipeline {
+  agent any
+  options { timestamps() }
+
+  parameters {
+    string(name: 'IMAGE_REPO', defaultValue: 'satya66655/lab-app', description: 'docker.io/<namespace>/<name>')
+    string(name: 'IMAGE_TAG',  defaultValue: 'v1',                description: 'Image tag')
+    string(name: 'B_HOST',     defaultValue: 'ec2-user@<B_PUBLIC_IP>', description: 'SSH target for Instance B')
+    booleanParam(name: 'LOGIN_BEFORE_PUSH', defaultValue: true, description: 'docker login on Instance B before push')
+  }
+
+  environment {
+    REGISTRY = 'docker.io'
+  }
+
+  stages {
+    stage('Checkout repo') {
+      steps {
+        // Use GitHub PAT or SSH, pick what you already configured
+        checkout([$class: 'GitSCM',
+          branches: [[name: "*/main"]],
+          userRemoteConfigs: [[url: 'https://github.com/satya66655/jenkins-eks-lab.git', credentialsId: 'github-pat']]
+        ])
+      }
+    }
+
+    stage('Pack build context') {
+      steps {
+        sh '''
+          set -euo pipefail
+          # Include only what the Docker build needs; fallback to . if paths missing
+          if [ -d app ] && [ -d docker ]; then
+            tar -czf /tmp/build-context.tgz app docker
+          else
+            tar -czf /tmp/build-context.tgz .
+          fi
+          ls -lh /tmp/build-context.tgz
+        '''
+      }
+    }
+
+    stage('Copy context to Instance B') {
+      steps {
+        sshagent(credentials: ['ec2b-ssh']) {
+          sh '''
+            set -euo pipefail
+            ssh -o StrictHostKeyChecking=no "${B_HOST}" "mkdir -p ~/jenkins-ctx"
+            scp -o StrictHostKeyChecking=no /tmp/build-context.tgz "${B_HOST}:~/jenkins-ctx/build-context.tgz"
+          '''
+        }
+      }
+    }
+
+    stage('Build & Push on Instance B') {
+      steps {
+        script {
+          def cmdCore = """
+            set -euo pipefail
+            cd ~/jenkins-ctx
+            rm -rf ctx && mkdir ctx
+            tar -xzf build-context.tgz -C ctx
+            cd ctx
+            docker --version
+
+            docker build -f docker/Dockerfile -t ${env.REGISTRY}/${params.IMAGE_REPO}:${params.IMAGE_TAG} .
+            ${params.LOGIN_BEFORE_PUSH ? 'docker logout ' + env.REGISTRY + ' || true' : ''}
+          """
+
+          def cmdWithLogin = """
+            set -euo pipefail
+            cd ~/jenkins-ctx/ctx
+            echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin ${env.REGISTRY}
+            docker push ${env.REGISTRY}/${params.IMAGE_REPO}:${params.IMAGE_TAG}
+            docker logout ${env.REGISTRY} || true
+          """
+
+          if (params.LOGIN_BEFORE_PUSH) {
+            withCredentials([usernamePassword(credentialsId: 'dockerhub-satya', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+              sshagent(credentials: ['ec2b-ssh']) {
+                sh "ssh -o StrictHostKeyChecking=no ${params.B_HOST} '${cmdCore}'"
+                sh "ssh -o StrictHostKeyChecking=no ${params.B_HOST} '${cmdWithLogin}'"
+              }
+            }
+          } else {
+            sshagent(credentials: ['ec2b-ssh']) {
+              sh "ssh -o StrictHostKeyChecking=no ${params.B_HOST} '${cmdCore}'"
+              sh "ssh -o StrictHostKeyChecking=no ${params.B_HOST} 'docker push ${env.REGISTRY}/${params.IMAGE_REPO}:${params.IMAGE_TAG}'"
+            }
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    success {
+      echo "Pushed: ${env.REGISTRY}/${params.IMAGE_REPO}:${params.IMAGE_TAG}"
+    }
+  }
+}
+
